@@ -1,13 +1,15 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from .llm import create_client, query
 from .models import BuddyResponse
+from .store import ResultStatus, store
+from .wechat import router as wechat_router
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -27,6 +29,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(wechat_router)
+
 
 class QueryRequest(BaseModel):
     scene: str
@@ -37,9 +41,26 @@ async def api_query(req: QueryRequest):
     return query(req.scene, app.state.client)
 
 
+@app.get("/api/result/{result_id}")
+async def get_result(result_id: str):
+    entry = store.get(result_id)
+    if not entry:
+        raise HTTPException(404, "Result not found")
+    if entry.status == ResultStatus.PENDING:
+        return {"status": "pending", "scene": entry.scene}
+    if entry.status == ResultStatus.ERROR:
+        return {"status": "error", "error": entry.error}
+    return {"status": "done", "result": entry.result.model_dump(), "scene": entry.scene}
+
+
 @app.get("/")
 async def index():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/result/{result_id}")
+async def result_page(result_id: str):
+    return FileResponse(STATIC_DIR / "result.html")
 
 
 def main():
